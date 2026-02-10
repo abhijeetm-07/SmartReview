@@ -16,7 +16,7 @@ const auditSchema = new mongoose.Schema(
     ruleSet: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "RuleSet",
-      required: true,
+      required: false,
     },
   },
   { timestamps: true },
