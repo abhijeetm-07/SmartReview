@@ -1,7 +1,8 @@
+require("dotenv").config();
 const { GoogleGenAI } = require("@google/genai");
 const Audit = require("../models/Audit");
 
-const client = new GoogleGenAI({
+const ai = new GoogleGenAI({
   apiKey: process.env.AI_API_KEY,
 });
 
@@ -10,12 +11,21 @@ const generateReview = async (req, res) => {
     const { code, language } = req.body;
     const userId = req.user.id;
 
+    if (!code || !language) {
+      return res
+        .status(400)
+        .json({ message: "Code and language are required" });
+    }
+
     const prompt = `
-You are an expert ${language} developer.
+You are an expert ${language} code reviewer.
 
-Analyze the code below and return ONLY valid JSON
-in this exact format:
+STRICT RULES:
+- Respond with ONLY valid JSON
+- Do NOT include markdown
+- Do NOT include explanations outside JSON
 
+JSON FORMAT:
 {
   "score": number,
   "bugs": string[],
@@ -26,8 +36,8 @@ Code:
 ${code}
 `;
 
-    const result = await client.models.generateContent({
-      model: "gemini-1.0-pro", // ✅ WORKS FOR YOUR KEY
+    const response = await ai.models.generateContent({
+      model: "models/gemini-2.5-flash",
       contents: [
         {
           role: "user",
@@ -36,34 +46,33 @@ ${code}
       ],
       generationConfig: {
         temperature: 0.2,
-        responseMimeType: "application/json",
       },
     });
 
-    const text = result.candidates[0].content.parts[0].text;
+    const rawText = response.text;
 
     let parsedFeedback;
     try {
-      parsedFeedback = JSON.parse(text);
-    } catch {
+      parsedFeedback = JSON.parse(rawText);
+    } catch (err) {
       parsedFeedback = {
         score: 0,
         bugs: [],
         suggestions: [],
-        raw: text,
+        raw: rawText,
       };
     }
 
     const newAudit = await Audit.create({
       user: userId,
-      codeSnippet: code,
+      content: code, // Changed from codeSnippet to content to match your Schema
       language,
-      aiResponse: parsedFeedback,
+      aiResponse: JSON.stringify(parsedFeedback),
     });
 
     return res.status(200).json(newAudit);
   } catch (error) {
-    console.error("DEBUG AI ERROR:", error);
+    console.error("AI ERROR:", error);
     return res.status(500).json({
       message: "AI Review failed",
       error: error.message,
