@@ -1,83 +1,47 @@
-require("dotenv").config();
-const { GoogleGenAI } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai"); // Standard SDK
 const Audit = require("../models/Audit");
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.AI_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.AI_API_KEY);
 
 const generateReview = async (req, res) => {
   try {
     const { code, language } = req.body;
     const userId = req.user.id;
 
-    if (!code || !language) {
-      return res
-        .status(400)
-        .json({ message: "Code and language are required" });
-    }
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const prompt = `
-You are an expert ${language} code reviewer.
+    const prompt = `Review this ${language} code. 
+    Return ONLY valid JSON: {"score": number, "bugs": [], "suggestions": []}.
+    Code: ${code}`;
 
-STRICT RULES:
-- Respond with ONLY valid JSON
-- Do NOT include markdown
-- Do NOT include explanations outside JSON
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    let rawText = response.text();
 
-JSON FORMAT:
-{
-  "score": number,
-  "bugs": string[],
-  "suggestions": string[]
-}
-
-Code:
-${code}
-`;
-
-    const response = await ai.models.generateContent({
-      model: "models/gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-      },
-    });
-
-    const rawText = response.text;
+    // Clean Markdown backticks if Gemini includes them
+    rawText = rawText.replace(/```json|```/g, "").trim();
 
     let parsedFeedback;
     try {
       parsedFeedback = JSON.parse(rawText);
     } catch (err) {
+      console.error("JSON Parse Error:", rawText);
       parsedFeedback = {
         score: 0,
-        bugs: [],
+        bugs: ["AI response format error"],
         suggestions: [],
-        raw: rawText,
       };
     }
 
     const newAudit = await Audit.create({
       user: userId,
-      content: code, // Changed from codeSnippet to content to match your Schema
-      language,
+      content: code,
+      language: language || "javascript",
       aiResponse: JSON.stringify(parsedFeedback),
     });
 
     return res.status(200).json(newAudit);
   } catch (error) {
-    console.error("AI ERROR:", error);
-    return res.status(500).json({
-      message: "AI Review failed",
-      error: error.message,
-    });
+    res.status(500).json({ message: "Review failed", error: error.message });
   }
 };
-
-module.exports = { generateReview };
